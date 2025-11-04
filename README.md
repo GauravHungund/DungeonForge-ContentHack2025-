@@ -54,8 +54,12 @@ Step into a realm where your words shape worlds, your choices summon quests, and
 
    ```bash
    AIRIA_API_KEY=your-airia-api-key-here
-   AIRIA_USER_ID=your-airia-user-id-here
+   AIRIA_USER_ID=your-airia-user-id-guid-here
    ```
+   
+   ⚠️ **Important:** `AIRIA_USER_ID` must be a valid GUID (UUID format), e.g., `cafe22b2-b79d-408e-b762-d6a7d54e5802`
+   
+   The backend will automatically validate and generate a GUID if an invalid one is provided.
 
 2. **Install backend**
 
@@ -137,12 +141,23 @@ npm start
 
 ---
 
+## 🔧 **Recent Updates**
+
+- ✅ Updated Airia API integration with improved error handling
+- ✅ Enhanced logging for debugging API issues
+- ✅ GUID validation for Airia user IDs
+- ✅ Improved JSON response parsing
+- ✅ Mobile web app support (meta tags)
+- ✅ Stack AI image generation integration
+
 ## 🌌 **Roadmap**
 
 - [x] AI text generation  
 - [x] Storybook UI  
 - [x] ElevenLabs integration  
 - [x] Multiplayer sync mode  
+- [x] Airia API integration with GUID support
+- [x] Enhanced error handling and logging
 - [ ] Persistent save/load stories  
 - [ ] Character avatars  
 - [ ] Map creation  

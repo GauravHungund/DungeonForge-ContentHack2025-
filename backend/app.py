@@ -38,8 +38,19 @@ CORS(app,
 
 # Initialize Airia configuration
 AIRIA_API_KEY = os.getenv('AIRIA_API_KEY')
-AIRIA_USER_ID = os.getenv('AIRIA_USER_ID', str(uuid.uuid4()))
-AIRIA_PIPELINE_URL = "https://api.airia.ai/v2/PipelineExecution/74d3e775-1b60-42f2-be75-e3fb963a5e02"
+# Ensure AIRIA_USER_ID is a valid GUID (UUID)
+_user_id_env = os.getenv('AIRIA_USER_ID')
+try:
+    # Try to validate if it's a valid UUID
+    if _user_id_env:
+        AIRIA_USER_ID = str(uuid.UUID(_user_id_env))  # Validate and normalize UUID
+    else:
+        AIRIA_USER_ID = str(uuid.uuid4())
+except (ValueError, AttributeError):
+    # If invalid, generate a new one
+    print(f"WARNING: AIRIA_USER_ID '{_user_id_env}' is not a valid GUID. Generating a new UUID.")
+    AIRIA_USER_ID = str(uuid.uuid4())
+AIRIA_PIPELINE_URL = "https://api.airia.ai/v2/PipelineExecution/cafe22b2-b79d-408e-b762-d6a7d54e5802"
 
 # Initialize ElevenLabs configuration
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
@@ -71,32 +82,109 @@ image_cache = {}  # {request_id: image_url}
 def call_airia_agent(user_input):
     """Call Airia agent and return the response"""
     try:
+        if not AIRIA_API_KEY:
+            print("ERROR: AIRIA_API_KEY is not set in environment variables")
+            return None
+            
         payload = json.dumps({
-            "userId": AIRIA_USER_ID,
-            "request": user_input,
+            "userId": AIRIA_USER_ID,  # Must be a valid GUID
+            "userInput": user_input,
             "asyncOutput": False
         })
+        
+        print(f"[Airia API] Using userId (GUID): {AIRIA_USER_ID}")
         
         headers = {
             "X-API-KEY": AIRIA_API_KEY,
             "Content-Type": "application/json"
         }
         
-        response = requests.post(AIRIA_PIPELINE_URL, headers=headers, data=payload, timeout=90)
+        print(f"[Airia API] Calling endpoint: {AIRIA_PIPELINE_URL}")
+        print(f"[Airia API] Payload: {payload[:200]}...")  # Log first 200 chars
+        
+        response = requests.post(AIRIA_PIPELINE_URL, headers=headers, data=payload, timeout=120)  # Increased to 120 seconds
+        
+        print(f"[Airia API] Response status: {response.status_code}")
         
         if response.status_code == 200:
-            response_data = response.json()
-            # Extract the actual text response from Airia's response structure
-            # Adjust this based on the actual response format from your agent
-            if isinstance(response_data, dict):
-                # Try common response fields
-                return response_data.get('output') or response_data.get('result') or response_data.get('response') or str(response_data)
-            return str(response_data)
+            try:
+                response_data = response.json()
+                print(f"[Airia API] Response type: {type(response_data)}")
+                print(f"[Airia API] Response keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'Not a dict'}")
+                
+                # Extract the actual text response from Airia's response structure
+                # Try multiple common response field names
+                if isinstance(response_data, dict):
+                    # Check for 'result' field first (Airia API specific)
+                    result_value = response_data.get('result')
+                    if result_value:
+                        print(f"[Airia API] Found 'result' field")
+                        # Result might be a JSON string, try to parse it
+                        if isinstance(result_value, str):
+                            try:
+                                parsed_result = json.loads(result_value)
+                                print(f"[Airia API] Parsed result JSON, keys: {list(parsed_result.keys()) if isinstance(parsed_result, dict) else 'Not a dict'}")
+                                # Return the FULL JSON string so the story endpoint can extract story, summary50, and options
+                                # Don't extract just one field - return the whole thing so it can be parsed properly
+                                print(f"[Airia API] Returning full result JSON for parsing")
+                                return result_value  # Return the JSON string as-is for proper parsing
+                            except json.JSONDecodeError:
+                                # If it's not JSON, return as string
+                                print(f"[Airia API] Result is plain string, returning as-is")
+                                return result_value
+                        else:
+                            # Result is already a dict/list, convert to JSON string
+                            print(f"[Airia API] Result is {type(result_value)}, converting to JSON string")
+                            return json.dumps(result_value)
+                    
+                    # Try other common response fields
+                    text_response = (response_data.get('output') or 
+                                   response_data.get('response') or 
+                                   response_data.get('text') or
+                                   response_data.get('content') or
+                                   response_data.get('message') or
+                                   response_data.get('data'))
+                    
+                    if text_response:
+                        print(f"[Airia API] Found response in field: {[k for k in ['output', 'response', 'text', 'content', 'message', 'data'] if response_data.get(k)][0]}")
+                        return str(text_response)
+                    
+                    # If no common field found, try to get the first string value
+                    for key, value in response_data.items():
+                        if isinstance(value, str) and len(value) > 10:  # Likely the actual response
+                            print(f"[Airia API] Using value from field: {key}")
+                            return value
+                    
+                    # Last resort: stringify the whole dict
+                    print(f"[Airia API] No string field found, converting entire response to string")
+                    return json.dumps(response_data)
+                elif isinstance(response_data, str):
+                    print(f"[Airia API] Response is already a string")
+                    return response_data
+                else:
+                    print(f"[Airia API] Response is {type(response_data)}, converting to string")
+                    return str(response_data)
+            except json.JSONDecodeError as e:
+                print(f"[Airia API] JSON decode error: {e}")
+                print(f"[Airia API] Raw response text: {response.text[:500]}")
+                # If JSON parsing fails, return the raw text
+                return response.text
         else:
-            print(f"Airia API error: {response.status_code} - {response.text}")
+            print(f"[Airia API] ERROR - Status {response.status_code}: {response.text}")
             return None
+    except requests.exceptions.Timeout:
+        print(f"[Airia API] ERROR - Request timed out after 120 seconds")
+        print(f"[Airia API] The pipeline may be processing slowly. Try again or check the pipeline status in Airia dashboard.")
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"[Airia API] ERROR - Request exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
     except Exception as e:
-        print(f"Error calling Airia agent: {e}")
+        print(f"[Airia API] ERROR - Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def generate_scene_image_async(summary_text, user_id, result_dict, key):
@@ -655,6 +743,9 @@ def get_story():
         )
 
         raw_text = call_airia_agent(user_input)
+        print(f"[Story Endpoint] raw_text received: {raw_text[:200] if raw_text else 'None'}...")
+        print(f"[Story Endpoint] raw_text type: {type(raw_text)}")
+        print(f"[Story Endpoint] raw_text length: {len(raw_text) if raw_text else 0}")
 
         # Parse JSON with safe fallback
         import json
@@ -664,18 +755,24 @@ def get_story():
         if raw_text:
             try:
                 parsed = extract_json_from_text(raw_text)
+                print(f"[Story Endpoint] parsed JSON: {parsed}")
                 if parsed is None:
                     raise ValueError('No JSON object could be decoded from model output')
                 story = parsed.get('story')
                 summary50 = parsed.get('summary50')
                 opts = parsed.get('options')
+                print(f"[Story Endpoint] Extracted - story: {story[:100] if story else None}..., summary50: {summary50[:50] if summary50 else None}..., options: {opts}")
                 if isinstance(opts, list):
                     options = [str(o) for o in opts if isinstance(o, str)]
             except Exception as parse_err:
-                print(f"JSON parse failed, falling back to text: {parse_err}")
+                print(f"[Story Endpoint] JSON parse failed, falling back to text: {parse_err}")
+                import traceback
+                traceback.print_exc()
                 story = raw_text
 
+        print(f"[Story Endpoint] Final story value: {story[:100] if story else None}...")
         if not story:
+            print("[Story Endpoint] WARNING: story is empty, using error message")
             story = "I'm having trouble generating the story right now. Please try again."
         
         # Generate scene image from summary (wait for completion)
